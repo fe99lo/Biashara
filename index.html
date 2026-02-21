@@ -3,8 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Biashara Ledger Pro | Mayega Production</title>
+    <title>Biashara Ledger Pro</title>
     
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0ea5e9">
+    <link rel="apple-touch-icon" href="icon-192.png">
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -18,15 +22,12 @@
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-        
         .print-header { display: none; }
-
-        /* THE PDF/PRINT ENGINE */
         @media print {
             body { background-color: white; color: black; font-size: 12pt; }
             .no-print { display: none !important; }
             .print-header { display: block; text-align: center; margin-bottom: 2rem; border-bottom: 2px solid black; padding-bottom: 1rem; }
-            .glass-card { background: none; backdrop-filter: none; border: none; box-shadow: none; padding: 0; }
+            .glass-card { background: none; border: none; padding: 0; }
             .print-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
             .print-table th, .print-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
             .print-table th { background-color: #f3f4f6; font-weight: bold; }
@@ -39,9 +40,15 @@
     <div id="root"></div>
 
     <script type="text/babel">
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js').catch(err => console.error('Service Worker failed', err));
+            });
+        }
+
         const { useState, useEffect, useMemo } = React;
 
-        // Reactive Browser Database
+        // Custom Hook for Browser Database
         function useDatabase(collectionName, initialData) {
             const [data, setData] = useState(() => {
                 try {
@@ -59,23 +66,37 @@
 
         function App() {
             const [transactions, setTransactions] = useDatabase('biashara_ledger_v2', []);
-            const [activeTab, setActiveTab] = useState('ledger'); // ledger, debts, reports
+            const [activeTab, setActiveTab] = useState('ledger'); 
             const [isModalOpen, setIsModalOpen] = useState(false);
+            const [installPrompt, setInstallPrompt] = useState(null);
+
+            useEffect(() => {
+                const handleBeforeInstallPrompt = (e) => {
+                    e.preventDefault(); 
+                    setInstallPrompt(e); 
+                };
+                window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+                return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+            }, []);
+
+            const handleInstallClick = async () => {
+                if (!installPrompt) return;
+                installPrompt.prompt();
+                const { outcome } = await installPrompt.userChoice;
+                if (outcome === 'accepted') setInstallPrompt(null); 
+            };
             
-            // Form State
+            // Form & Report State
             const [type, setType] = useState('INCOME');
             const [status, setStatus] = useState('PAID');
             const [amount, setAmount] = useState('');
             const [desc, setDesc] = useState('');
             const [client, setClient] = useState('');
             const [dueDate, setDueDate] = useState('');
-
-            // Reporting State
-            const [reportPeriod, setReportPeriod] = useState('ALL'); // ALL, WEEK, MONTH, QUARTER, YEAR
+            const [reportPeriod, setReportPeriod] = useState('ALL');
 
             const formatMoney = (val) => new Intl.NumberFormat('en-KE', { style: 'currency', currency: 'KES', minimumFractionDigits: 0 }).format(val);
 
-            // DATA QUERY ENGINE
             const filteredData = useMemo(() => {
                 const now = new Date();
                 return transactions.filter(tx => {
@@ -89,73 +110,102 @@
                 });
             }, [transactions, reportPeriod]);
 
-            // CALCULATIONS (Based on current filter)
+            // Analytics Math
             const totalIncome = filteredData.filter(t => t.type === 'INCOME' && t.status === 'PAID').reduce((sum, t) => sum + Number(t.amount), 0);
             const totalExpense = filteredData.filter(t => t.type === 'EXPENSE' && t.status === 'PAID').reduce((sum, t) => sum + Number(t.amount), 0);
             const netBalance = totalIncome - totalExpense;
             
-            // Debt Calculations (Global, not filtered by time)
             const unpaidDebts = transactions.filter(t => t.type === 'INCOME' && t.status === 'CREDIT');
             const unpaidLiabilities = transactions.filter(t => t.type === 'EXPENSE' && t.status === 'CREDIT');
             const totalOwedToYou = unpaidDebts.reduce((sum, t) => sum + Number(t.amount), 0);
             const totalYouOwe = unpaidLiabilities.reduce((sum, t) => sum + Number(t.amount), 0);
 
-            // CRUD ACTIONS
+            // Database Actions
             const handleAddTransaction = (e) => {
                 e.preventDefault();
                 if (!amount || !desc) return;
-
                 const newTx = {
                     id: crypto.randomUUID(),
                     timestamp: new Date().toISOString(),
-                    type,
-                    status,
-                    amount: Number(amount),
-                    desc,
-                    client: client || 'Walk-in',
+                    type, status, amount: Number(amount), desc, client: client || 'Walk-in',
                     dueDate: status === 'CREDIT' ? dueDate : null
                 };
-
                 setTransactions([newTx, ...transactions]);
                 setAmount(''); setDesc(''); setClient(''); setDueDate(''); setStatus('PAID');
                 setIsModalOpen(false);
             };
 
-            const markAsPaid = (id) => {
-                setTransactions(transactions.map(tx => tx.id === id ? { ...tx, status: 'PAID', timestamp: new Date().toISOString() } : tx));
+            const markAsPaid = (id) => setTransactions(transactions.map(tx => tx.id === id ? { ...tx, status: 'PAID', timestamp: new Date().toISOString() } : tx));
+
+            const handleExportData = () => {
+                const dataStr = JSON.stringify(transactions, null, 2);
+                const blob = new Blob([dataStr], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `biashara_pro_backup_${new Date().toISOString().split('T')[0]}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
             };
 
-            const handleDelete = (id) => {
-                if(confirm("Delete this record permanently?")) {
-                    setTransactions(transactions.filter(t => t.id !== id));
+            const handleImportData = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const importedData = JSON.parse(event.target.result);
+                        if (Array.isArray(importedData)) {
+                            setTransactions(importedData);
+                            alert("Database restored successfully!");
+                        } else {
+                            alert("Invalid database file format.");
+                        }
+                    } catch (err) { alert("Error reading backup file."); }
+                };
+                reader.readAsText(file);
+            };
+
+            const handleWipeDatabase = () => {
+                if(confirm("CRITICAL WARNING: This will permanently delete all records from your browser. Are you sure?")) {
+                    if(prompt("Type 'DELETE' to confirm") === 'DELETE') {
+                        setTransactions([]);
+                    }
                 }
             };
 
             return (
                 <div className="max-w-4xl mx-auto h-screen flex flex-col p-4 md:p-8">
                     
-                    {/* PDF HEADER (Hidden on screen) */}
                     <div className="print-header">
                         <h1 style={{fontSize: '24pt', fontWeight: 'bold', margin: '0'}}>Biashara Ledger Report</h1>
                         <p style={{margin: '5px 0'}}>Generated on: {new Date().toLocaleString()}</p>
                         <p style={{margin: '0'}}>Period: {reportPeriod}</p>
                     </div>
 
-                    {/* MAIN UI HEADER */}
                     <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 no-print">
                         <div>
-                            <h1 className="text-2xl font-black text-white tracking-tight flex items-center gap-2">
-                                <span className="w-4 h-4 rounded-full bg-sky-500 animate-pulse"></span>
-                                Biashara Ledger Pro
-                            </h1>
-                            <p className="text-slate-400 text-xs font-mono mt-1">Cashflow & Debt Management</p>
+                            <div className="flex items-center gap-3">
+                                <h1 className="text-2xl font-black text-white tracking-tight flex items-center gap-2">
+                                    <span className="w-4 h-4 rounded-full bg-sky-500 animate-pulse"></span>
+                                    Biashara Ledger Pro
+                                </h1>
+                                {installPrompt && (
+                                    <button onClick={handleInstallClick} className="bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 shadow-[0_0_10px_rgba(16,185,129,0.5)] transition-all">
+                                        ⬇️ Install App
+                                    </button>
+                                )}
+                            </div>
+                            <p className="text-slate-400 text-xs font-mono mt-1">Cashflow & Database Management</p>
                         </div>
                         <nav className="flex flex-wrap gap-2 bg-slate-900 border border-slate-800 rounded-lg p-1 w-full md:w-auto">
-                            <button onClick={() => setActiveTab('ledger')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'ledger' ? 'bg-slate-800 text-white shadow' : 'text-slate-500'}`}>Ledger</button>
-                            <button onClick={() => setActiveTab('debts')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'debts' ? 'bg-slate-800 text-white shadow' : 'text-slate-500'}`}>
+                            <button onClick={() => setActiveTab('ledger')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'ledger' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>Ledger</button>
+                            <button onClick={() => setActiveTab('debts')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'debts' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>
                                 Debts {totalOwedToYou > 0 && <span className="ml-2 bg-rose-500 text-white px-1.5 py-0.5 rounded-full text-[10px]">{unpaidDebts.length}</span>}
                             </button>
-                            <button onClick={() => setActiveTab('reports')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'reports' ? 'bg-slate-800 text-white shadow' : 'text-slate-500'}`}>Reports</button>
+                            <button onClick={() => setActiveTab('reports')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'reports' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>Reports</button>
+                            <button onClick={() => setActiveTab('database')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'database' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>Data</button>
                         </nav>
                     </header>
 
@@ -168,7 +218,6 @@
                                     + Add Record
                                 </button>
                             </div>
-
                             <div className="flex-1 overflow-y-auto glass-card rounded-2xl p-2 md:p-4 mb-4">
                                 <div className="space-y-2">
                                     {transactions.slice(0, 50).map(tx => (
@@ -197,7 +246,7 @@
                         </div>
                     )}
 
-                    {/* VIEW: DEBTS & CREDITS */}
+                    {/* VIEW: DEBTS */}
                     {activeTab === 'debts' && (
                         <div className="flex flex-col flex-1 h-full no-print">
                             <div className="grid grid-cols-2 gap-4 mb-6">
@@ -210,7 +259,6 @@
                                     <h2 className="text-2xl font-black text-rose-400 tracking-tight">{formatMoney(totalYouOwe)}</h2>
                                 </div>
                             </div>
-
                             <h3 className="text-lg font-bold mb-4">Pending Collections</h3>
                             <div className="flex-1 overflow-y-auto glass-card rounded-2xl p-2 md:p-4 mb-4">
                                 {unpaidDebts.length === 0 ? (
@@ -218,15 +266,14 @@
                                 ) : (
                                     <div className="space-y-3">
                                         {unpaidDebts.map(tx => (
-                                            <div key={tx.id} className="flex justify-between items-center p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+                                            <div key={tx.id} className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center p-4 bg-slate-800/50 rounded-xl border border-slate-700 gap-4">
                                                 <div>
                                                     <p className="text-sm font-bold text-amber-400">{tx.client}</p>
                                                     <p className="text-xs text-slate-400 mt-1">{tx.desc}</p>
-                                                    {tx.dueDate && <p className="text-[10px] text-rose-400 font-mono mt-2">Due: {new Date(tx.dueDate).toLocaleDateString()}</p>}
                                                 </div>
-                                                <div className="text-right flex flex-col items-end gap-2">
+                                                <div className="text-left sm:text-right flex flex-row sm:flex-col items-center sm:items-end justify-between w-full sm:w-auto gap-2">
                                                     <p className="text-lg font-black font-mono">{formatMoney(tx.amount)}</p>
-                                                    <button onClick={() => markAsPaid(tx.id)} className="text-[10px] bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-white px-3 py-1 rounded font-bold uppercase transition-colors">
+                                                    <button onClick={() => markAsPaid(tx.id)} className="text-[10px] bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-white px-3 py-1.5 rounded font-bold uppercase transition-colors">
                                                         Mark as Paid
                                                     </button>
                                                 </div>
@@ -238,27 +285,23 @@
                         </div>
                     )}
 
-                    {/* VIEW: REPORTS & EXPORT */}
+                    {/* VIEW: REPORTS */}
                     {activeTab === 'reports' && (
                         <div className="flex flex-col flex-1 h-full">
-                            
-                            {/* Filter Controls (Hidden on Print) */}
-                            <div className="flex justify-between items-center mb-6 no-print bg-slate-800 p-2 rounded-lg">
-                                <div className="flex gap-1 overflow-x-auto">
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 no-print bg-slate-800 p-2 rounded-lg gap-4">
+                                <div className="flex gap-1 overflow-x-auto w-full md:w-auto">
                                     {['ALL', 'WEEK', 'MONTH', 'QUARTER', 'YEAR'].map(period => (
-                                        <button key={period} onClick={() => setReportPeriod(period)} className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${reportPeriod === period ? 'bg-sky-500 text-white' : 'text-slate-400 hover:text-white'}`}>
+                                        <button key={period} onClick={() => setReportPeriod(period)} className={`px-3 py-1.5 rounded text-xs font-bold transition-all whitespace-nowrap ${reportPeriod === period ? 'bg-sky-500 text-white' : 'text-slate-400 hover:text-white'}`}>
                                             {period}
                                         </button>
                                     ))}
                                 </div>
-                                <button onClick={() => window.print()} className="bg-slate-700 hover:bg-slate-600 px-4 py-1.5 rounded text-xs font-bold flex items-center gap-2">
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+                                <button onClick={() => window.print()} className="bg-slate-700 hover:bg-slate-600 px-4 py-1.5 rounded text-xs font-bold w-full md:w-auto text-center">
                                     Print PDF
                                 </button>
                             </div>
 
-                            {/* Printable Data View */}
-                            <div className="print-summary no-print mb-6 grid grid-cols-3 gap-4">
+                            <div className="print-summary no-print mb-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
                                 <div className="glass-card p-4 rounded-xl">
                                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Cash In</p>
                                     <h2 className="text-xl font-black text-emerald-400">{formatMoney(totalIncome)}</h2>
@@ -273,34 +316,30 @@
                                 </div>
                             </div>
 
-                            {/* Print-Only Summary Box */}
                             <div className="no-print" style={{display: 'none'}} className="print-summary">
                                 <div>Total Income: {formatMoney(totalIncome)}</div>
                                 <div>Total Expenses: {formatMoney(totalExpense)}</div>
                                 <div>Net Balance: {formatMoney(netBalance)}</div>
                             </div>
 
-                            {/* Detailed Table */}
-                            <div className="glass-card rounded-2xl p-4 overflow-x-auto">
-                                <table className="print-table w-full text-left text-sm">
+                            <div className="glass-card rounded-2xl p-4 overflow-x-auto flex-1">
+                                <table className="print-table w-full text-left text-sm whitespace-nowrap">
                                     <thead>
                                         <tr className="text-slate-400 border-b border-slate-700">
-                                            <th className="pb-3 font-medium">Date</th>
-                                            <th className="pb-3 font-medium">Client/Entity</th>
-                                            <th className="pb-3 font-medium">Description</th>
-                                            <th className="pb-3 font-medium">Status</th>
+                                            <th className="pb-3 pr-4 font-medium">Date</th>
+                                            <th className="pb-3 pr-4 font-medium">Client</th>
+                                            <th className="pb-3 pr-4 font-medium">Description</th>
+                                            <th className="pb-3 pr-4 font-medium">Status</th>
                                             <th className="pb-3 font-medium text-right">Amount</th>
                                         </tr>
                                     </thead>
                                     <tbody className="font-mono">
                                         {filteredData.map(tx => (
                                             <tr key={tx.id} className="border-b border-slate-800/50">
-                                                <td className="py-3 text-slate-300">{new Date(tx.timestamp).toLocaleDateString()}</td>
-                                                <td className="py-3 text-slate-300">{tx.client}</td>
-                                                <td className="py-3 text-slate-400">{tx.desc}</td>
-                                                <td className="py-3">
-                                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${tx.status === 'PAID' ? 'text-emerald-400' : 'text-amber-400'}`}>{tx.status}</span>
-                                                </td>
+                                                <td className="py-3 pr-4 text-slate-300">{new Date(tx.timestamp).toLocaleDateString()}</td>
+                                                <td className="py-3 pr-4 text-slate-300">{tx.client}</td>
+                                                <td className="py-3 pr-4 text-slate-400">{tx.desc}</td>
+                                                <td className="py-3 pr-4"><span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${tx.status === 'PAID' ? 'text-emerald-400' : 'text-amber-400'}`}>{tx.status}</span></td>
                                                 <td className={`py-3 text-right font-bold ${tx.type === 'INCOME' ? 'text-emerald-400' : 'text-slate-300'}`}>
                                                     {tx.type === 'INCOME' ? '+' : '-'}{formatMoney(tx.amount)}
                                                 </td>
@@ -312,48 +351,84 @@
                         </div>
                     )}
 
+                    {/* VIEW: DATABASE MANAGEMENT */}
+                    {activeTab === 'database' && (
+                        <div className="flex flex-col flex-1 h-full no-print">
+                            <div className="glass-card rounded-2xl p-4 md:p-8 flex-1 overflow-y-auto">
+                                <h2 className="text-xl font-bold mb-4">Database Storage</h2>
+                                <p className="text-sm text-slate-400 mb-8 max-w-lg">
+                                    Your records are secured entirely inside your browser's local memory up to the HTML5 limit (which easily holds thousands of text transactions). You must export your database regularly to prevent data loss.
+                                </p>
+
+                                <div className="space-y-4 md:space-y-6">
+                                    <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                        <div>
+                                            <h3 className="font-bold text-sky-400">Export Backup</h3>
+                                            <p className="text-xs text-slate-400 mt-1">Download a JSON copy of all records.</p>
+                                        </div>
+                                        <button onClick={handleExportData} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm font-bold transition-colors w-full md:w-auto text-center">
+                                            Download .JSON
+                                        </button>
+                                    </div>
+
+                                    <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                        <div>
+                                            <h3 className="font-bold text-emerald-400">Restore Backup</h3>
+                                            <p className="text-xs text-slate-400 mt-1">Upload a previous JSON backup file.</p>
+                                        </div>
+                                        <label className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm font-bold transition-colors cursor-pointer w-full md:w-auto text-center">
+                                            Upload File
+                                            <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
+                                        </label>
+                                    </div>
+
+                                    <div className="bg-rose-500/10 border border-rose-500/30 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mt-8 md:mt-12">
+                                        <div>
+                                            <h3 className="font-bold text-rose-500">Wipe Database</h3>
+                                            <p className="text-xs text-rose-500/70 mt-1">Permanently delete all local records.</p>
+                                        </div>
+                                        <button onClick={handleWipeDatabase} className="bg-rose-500/20 hover:bg-rose-500 hover:text-white text-rose-500 border border-rose-500 px-4 py-2 rounded-lg text-sm font-bold transition-colors w-full md:w-auto text-center">
+                                            Factory Reset
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* MODAL: ADD TRANSACTION */}
                     {isModalOpen && (
                         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 no-print">
                             <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto">
                                 <button onClick={() => setIsModalOpen(false)} className="absolute top-4 right-4 text-slate-500 hover:text-white">✕</button>
-                                
                                 <h2 className="text-xl font-bold mb-6">New Record</h2>
-                                
                                 <form onSubmit={handleAddTransaction} className="space-y-4">
-                                    
                                     <div className="flex bg-slate-800 p-1 rounded-lg">
                                         <button type="button" onClick={() => setType('INCOME')} className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${type === 'INCOME' ? 'bg-emerald-500 text-white shadow' : 'text-slate-400'}`}>INCOME</button>
                                         <button type="button" onClick={() => setType('EXPENSE')} className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${type === 'EXPENSE' ? 'bg-rose-500 text-white shadow' : 'text-slate-400'}`}>EXPENSE</button>
                                     </div>
-
                                     <div className="flex bg-slate-800 p-1 rounded-lg">
                                         <button type="button" onClick={() => setStatus('PAID')} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${status === 'PAID' ? 'bg-slate-600 text-white shadow' : 'text-slate-400'}`}>CASH PAID</button>
-                                        <button type="button" onClick={() => setStatus('CREDIT')} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${status === 'CREDIT' ? 'bg-amber-500 text-white shadow' : 'text-slate-400'}`}>ON CREDIT (DEBT)</button>
+                                        <button type="button" onClick={() => setStatus('CREDIT')} className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${status === 'CREDIT' ? 'bg-amber-500 text-white shadow' : 'text-slate-400'}`}>ON CREDIT</button>
                                     </div>
-
                                     <div>
                                         <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Amount (KES)</label>
                                         <input type="number" required min="1" value={amount} onChange={e => setAmount(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-lg font-mono text-white focus:outline-none focus:border-sky-500" placeholder="0.00" />
                                     </div>
-
                                     <div>
                                         <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Description</label>
-                                        <input type="text" required value={desc} onChange={e => setDesc(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-sky-500" placeholder="Items sold or service provided..." />
+                                        <input type="text" required value={desc} onChange={e => setDesc(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-sky-500" placeholder="Items sold or service..." />
                                     </div>
-
                                     <div>
                                         <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Client / Entity</label>
                                         <input type="text" value={client} required={status === 'CREDIT'} onChange={e => setClient(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-sky-500" placeholder="Required if on credit" />
                                     </div>
-
                                     {status === 'CREDIT' && (
                                         <div>
                                             <label className="block text-xs font-bold text-amber-400 mb-1 uppercase tracking-wider">Due Date</label>
                                             <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-amber-500" />
                                         </div>
                                     )}
-
                                     <button type="submit" className="w-full bg-sky-500 hover:bg-sky-400 text-white font-black py-4 rounded-xl mt-4 transition-colors">
                                         Save Record
                                     </button>
