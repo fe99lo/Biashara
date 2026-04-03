@@ -3,10 +3,11 @@
 **Empowering Micro-Businesses Worldwide with Offline-First, Multi-Currency Financial Management**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests Passing](https://img.shields.io/badge/tests-90%20passing-brightgreen)]()
+[![Tests Passing](https://img.shields.io/badge/tests-53%20passing-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)]()
 [![TypeScript](https://img.shields.io/badge/language-TypeScript-blue)]()
 [![PWA](https://img.shields.io/badge/PWA-Offline--First-orange)]()
+[![Port](https://img.shields.io/badge/port-3000-blue)]()
 
 ---
 
@@ -96,38 +97,87 @@ biashara-ledger-pro/
 
 ## 🚀 Getting Started
 
-### Prerequisites
-- Node.js (v16+)
-- npm or yarn
+### ⚡ Quick Start (Recommended for Most Users)
 
-### Installation
+**Biashara Ledger Pro is a single-file web application!** No complex setup required.
+
+#### Option 1: Direct Browser Access (Simplest)
+Simply open `index.html` in your web browser:
+```bash
+# On most systems, just double-click index.html
+# Or use:
+open index.html          # macOS
+start index.html         # Windows
+xdg-open index.html      # Linux
+```
+
+#### Option 2: Local Development Server
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-username/biashara-ledger.git
+cd biashara-ledger
+
+# 2. Install dependencies (only needed for testing)
+npm install
+
+# 3. Start the local server
+npm start
+
+# Application will be available at http://localhost:3000
+```
+
+#### Option 3: Any Static Server
+You can serve `index.html` with any static file server:
+```bash
+# Using Python
+python -m http.server 3000
+
+# Using PHP
+php -S localhost:3000
+
+# Using Node.js http-server
+npx http-server -p 3000
+```
+
+---
+
+### For Contributors & Developers
+
+#### Prerequisites
+- Node.js v18+ (for running tests only)
+- Modern web browser (Chrome, Firefox, Edge, Safari)
+
+#### Installation
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/biashara-ledger-pro.git
-   cd biashara-ledger-pro
+   git clone https://github.com/your-username/biashara-ledger.git
+   cd biashara-ledger
    ```
 
-2. **Install dependencies**
+2. **Install dependencies** (for testing)
    ```bash
    npm install
    ```
 
-3. **Run Tests** (Verify everything works)
+3. **Start the development server**
+   ```bash
+   npm start
+   ```
+   The application will be available at `http://localhost:3000`.
+
+4. **Run Tests** (Verify everything works)
    ```bash
    npm test
    ```
 
-4. **Start Development Server**
-   ```bash
-   npm start
-   ```
-   Open `http://localhost:3000` in your browser.
-
-5. **Build for Production**
-   ```bash
-   npm run build
-   ```
+#### Building for Production
+**No build step required!** The application uses CDN-hosted dependencies and runs directly in the browser. Simply deploy `index.html` to any static hosting service:
+- GitHub Pages
+- Netlify
+- Vercel
+- Cloudflare Pages
+- AWS S3 + CloudFront
 
 ---
 

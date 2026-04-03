@@ -1,19 +1,38 @@
 {
-  "name": "workspace",
+  "name": "biashara-ledger-pro",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Offline-first financial management platform for entrepreneurs worldwide",
+  "main": "index.html",
   "scripts": {
-    "test": "jest"
+    "start": "npx http-server -p 3000 -c-1 --cors",
+    "build": "echo 'Production build: Simply serve index.html with any static server'",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:watch": "jest --watch",
+    "serve": "npx http-server -p 3000 -c-1 --cors"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": [
+    "ledger",
+    "accounting",
+    "offline-first",
+    "pwa",
+    "multi-currency",
+    "financial-inclusion",
+    "small-business"
+  ],
+  "author": "Biashara Ledger Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/biashara-ledger.git"
+  },
+  "homepage": "https://github.com/your-username/biashara-ledger#readme",
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.5.2",
+    "http-server": "^14.1.1",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^30.3.0",
     "jest-environment-jsdom": "^30.3.0",
