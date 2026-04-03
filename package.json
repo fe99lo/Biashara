@@ -21,7 +21,7 @@
     "small-business"
   ],
   "author": "Biashara Ledger Team",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "https://github.com/your-username/biashara-ledger.git"
