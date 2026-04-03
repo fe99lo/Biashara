@@ -271,8 +271,11 @@ import OfflineService from './offlineService';
 
 const offlineService = new OfflineService();
 
-// Add transaction while offline
-await offlineService.queueTransaction({
+// Initialize the service
+await offlineService.init();
+
+// Add transaction (automatically queues if offline)
+await offlineService.addTransaction({
   id: 'txn-123',
   type: 'INCOME',
   amount: 5000,
@@ -280,8 +283,8 @@ await offlineService.queueTransaction({
   description: 'Sale of goods'
 });
 
-// Sync when online
-await offlineService.syncQueue();
+// Manually trigger sync when online
+await offlineService.triggerSync();
 ```
 
 ---
