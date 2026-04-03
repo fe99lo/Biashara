@@ -363,7 +363,9 @@ export class OfflineService {
       }
       
       // Check for prototype pollution attempts
-      if (data.hasOwnProperty('__proto__') || data.hasOwnProperty('constructor') || data.hasOwnProperty('prototype')) {
+      if (Object.prototype.hasOwnProperty.call(data, '__proto__') || 
+          Object.prototype.hasOwnProperty.call(data, 'constructor') || 
+          Object.prototype.hasOwnProperty.call(data, 'prototype')) {
         return { success: false, error: 'Potential prototype pollution detected' };
       }
       
@@ -379,7 +381,9 @@ export class OfflineService {
           
           // Skip dangerous keys
           if (item && typeof item === 'object') {
-            if (item.hasOwnProperty('__proto__') || item.hasOwnProperty('constructor') || item.hasOwnProperty('prototype')) {
+            if (Object.prototype.hasOwnProperty.call(item, '__proto__') || 
+                Object.prototype.hasOwnProperty.call(item, 'constructor') || 
+                Object.prototype.hasOwnProperty.call(item, 'prototype')) {
               return { success: false, error: `Potential prototype pollution in ${storeName}[${i}]` };
             }
           }

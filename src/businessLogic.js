@@ -284,8 +284,10 @@ function validateImportData(data) {
     for (let i = 0; i < data.length; i++) {
         const item = data[i];
         
-        // Check for prototype pollution attempts
-        if (item.hasOwnProperty('__proto__') || item.hasOwnProperty('constructor') || item.hasOwnProperty('prototype')) {
+        // Check for prototype pollution attempts using safe hasOwnProperty
+        if (Object.prototype.hasOwnProperty.call(item, '__proto__') || 
+            Object.prototype.hasOwnProperty.call(item, 'constructor') || 
+            Object.prototype.hasOwnProperty.call(item, 'prototype')) {
             return { valid: false, error: `Potential prototype pollution detected in transaction ${i}` };
         }
         

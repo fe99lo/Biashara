@@ -26,7 +26,9 @@ export class APIIntegrationService {
   }
   
   // Validate webhook signature for security
-  private async verifyWebhookSignature(payload: any, signature: string, secret: string): Promise<boolean> {
+  // IMPORTANT: In production, this should receive the raw body string/bytes from the HTTP layer
+  // NOT the parsed JSON object, as JSON.stringify can change whitespace/key order
+  private async verifyWebhookSignature(rawBody: string, signature: string, secret: string): Promise<boolean> {
     if (!signature || !secret) {
       return false;
     }
@@ -42,7 +44,7 @@ export class APIIntegrationService {
         ['sign', 'verify']
       );
       
-      const payloadData = encoder.encode(JSON.stringify(payload));
+      const payloadData = encoder.encode(rawBody);
       const signatureBuffer = Uint8Array.from(atob(signature), c => c.charCodeAt(0));
       
       const isValid = await crypto.subtle.verify(
@@ -236,7 +238,7 @@ export class APIIntegrationService {
     });
   }
 
-  async processWebhook(integrationId: string, payload: any, signature?: string): Promise<void> {
+  async processWebhook(integrationId: string, rawBody: string, payload: any, signature?: string): Promise<void> {
     // Rate limit webhook processing
     if (!this.checkRateLimit(`webhook_${integrationId}`, 100)) {
       throw new Error('Rate limit exceeded');
@@ -250,7 +252,7 @@ export class APIIntegrationService {
     // Verify webhook signature if secret is available
     const webhookSecret = (integration.credentials as any)?.webhookSecret;
     if (webhookSecret && signature) {
-      const isValid = await this.verifyWebhookSignature(payload, signature, webhookSecret);
+      const isValid = await this.verifyWebhookSignature(rawBody, signature, webhookSecret);
       if (!isValid) {
         throw new Error('Invalid webhook signature');
       }
