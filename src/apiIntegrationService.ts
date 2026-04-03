@@ -1,10 +1,86 @@
 import { APIIntegration, Transaction, APIIntegrationSettings } from './types';
 
+// Secure credential storage interface
+interface SecureCredentials {
+  encryptedData: string;
+  iv: string;
+  timestamp: number;
+}
+
 export class APIIntegrationService {
   private integrations: Map<string, APIIntegration> = new Map();
   private webhookHandlers: Map<string, (payload: any) => Promise<void>> = new Map();
-
+  private readonly encryptionKey: CryptoKey | null = null;
+  
   constructor() {}
+  
+  // Generate secure random ID using crypto API
+  private generateSecureId(): string {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    // Fallback with cryptographically secure random values
+    const array = new Uint8Array(16);
+    crypto.getRandomValues(array);
+    return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  
+  // Validate webhook signature for security
+  // IMPORTANT: In production, this should receive the raw body string/bytes from the HTTP layer
+  // NOT the parsed JSON object, as JSON.stringify can change whitespace/key order
+  private async verifyWebhookSignature(rawBody: string, signature: string, secret: string): Promise<boolean> {
+    if (!signature || !secret) {
+      return false;
+    }
+    
+    try {
+      const encoder = new TextEncoder();
+      const keyData = encoder.encode(secret);
+      const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        keyData,
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign', 'verify']
+      );
+      
+      const payloadData = encoder.encode(rawBody);
+      const signatureBuffer = Uint8Array.from(atob(signature), c => c.charCodeAt(0));
+      
+      const isValid = await crypto.subtle.verify(
+        'HMAC',
+        cryptoKey,
+        signatureBuffer,
+        payloadData
+      );
+      
+      return isValid;
+    } catch (error) {
+      console.error('Webhook signature verification failed:', error);
+      return false;
+    }
+  }
+  
+  // Rate limiting state
+  private rateLimitState: Map<string, { count: number; resetTime: number }> = new Map();
+  
+  // Check rate limit (requests per minute)
+  private checkRateLimit(clientId: string, limit: number = 60): boolean {
+    const now = Date.now();
+    const state = this.rateLimitState.get(clientId);
+    
+    if (!state || now > state.resetTime) {
+      this.rateLimitState.set(clientId, { count: 1, resetTime: now + 60000 });
+      return true;
+    }
+    
+    if (state.count >= limit) {
+      return false;
+    }
+    
+    state.count++;
+    return true;
+  }
 
   registerIntegration(integration: APIIntegration): void {
     this.integrations.set(integration.id, integration);
@@ -162,7 +238,28 @@ export class APIIntegrationService {
     });
   }
 
-  async processWebhook(integrationId: string, payload: any): Promise<void> {
+  async processWebhook(integrationId: string, rawBody: string, payload: any, signature?: string): Promise<void> {
+    // Rate limit webhook processing
+    if (!this.checkRateLimit(`webhook_${integrationId}`, 100)) {
+      throw new Error('Rate limit exceeded');
+    }
+    
+    const integration = this.getIntegration(integrationId);
+    if (!integration) {
+      throw new Error('Integration not found');
+    }
+    
+    // Verify webhook signature if secret is available
+    const webhookSecret = (integration.credentials as any)?.webhookSecret;
+    if (webhookSecret && signature) {
+      const isValid = await this.verifyWebhookSignature(rawBody, signature, webhookSecret);
+      if (!isValid) {
+        throw new Error('Invalid webhook signature');
+      }
+    } else if (webhookSecret && !signature) {
+      throw new Error('Missing webhook signature');
+    }
+    
     const handler = this.webhookHandlers.get(integrationId);
     if (handler) {
       await handler(payload);

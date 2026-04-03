@@ -341,14 +341,66 @@ export class OfflineService {
     return new Blob([json], { type: 'application/json' });
   }
 
-  async importData(file: File): Promise<void> {
-    const text = await file.text();
-    const data = JSON.parse(text);
-
-    for (const [storeName, items] of Object.entries(data)) {
-      for (const item of items as any[]) {
-        await this.saveToStore(storeName, item);
+  async importData(file: File): Promise<{ success: boolean; error?: string }> {
+    try {
+      const text = await file.text();
+      
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        return { success: false, error: 'File size exceeds 10MB limit' };
       }
+      
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch (parseError) {
+        return { success: false, error: 'Invalid JSON format' };
+      }
+      
+      // Schema validation
+      if (!data || typeof data !== 'object') {
+        return { success: false, error: 'Invalid data structure' };
+      }
+      
+      // Check for prototype pollution attempts
+      if (Object.prototype.hasOwnProperty.call(data, '__proto__') || 
+          Object.prototype.hasOwnProperty.call(data, 'constructor') || 
+          Object.prototype.hasOwnProperty.call(data, 'prototype')) {
+        return { success: false, error: 'Potential prototype pollution detected' };
+      }
+      
+      // Validate stores structure
+      for (const [storeName, items] of Object.entries(data)) {
+        if (!Array.isArray(items)) {
+          return { success: false, error: `Store '${storeName}' must be an array` };
+        }
+        
+        // Validate each item in the store
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          
+          // Skip dangerous keys
+          if (item && typeof item === 'object') {
+            if (Object.prototype.hasOwnProperty.call(item, '__proto__') || 
+                Object.prototype.hasOwnProperty.call(item, 'constructor') || 
+                Object.prototype.hasOwnProperty.call(item, 'prototype')) {
+              return { success: false, error: `Potential prototype pollution in ${storeName}[${i}]` };
+            }
+          }
+        }
+      }
+
+      // Import validated data
+      for (const [storeName, items] of Object.entries(data)) {
+        for (const item of items as any[]) {
+          await this.saveToStore(storeName, item);
+        }
+      }
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Import error:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error during import' };
     }
   }
 }
