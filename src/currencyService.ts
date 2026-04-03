@@ -1,7 +1,12 @@
 import { Currency, CurrencyCode, ExchangeRate } from './types';
 
+// Constants for performance
+const MS_PER_HOUR = 3_600_000;
+const MS_PER_DAY = 86_400_000;
+const RATE_EXPIRY_MS = 24 * MS_PER_HOUR;
+
 export class CurrencyService {
-  private static currencies: Record<CurrencyCode, Currency> = {
+  private static readonly CURRENCIES: Record<CurrencyCode, Currency> = {
     USD: { code: 'USD', name: 'US Dollar', symbol: '$', decimalPlaces: 2, locale: 'en-US' },
     EUR: { code: 'EUR', name: 'Euro', symbol: '€', decimalPlaces: 2, locale: 'de-DE' },
     GBP: { code: 'GBP', name: 'British Pound', symbol: '£', decimalPlaces: 2, locale: 'en-GB' },
@@ -58,19 +63,19 @@ export class CurrencyService {
   }
 
   getCurrency(code: CurrencyCode): Currency | null {
-    return CurrencyService.currencies[code] || null;
+    return CurrencyService.CURRENCIES[code] ?? null;
   }
 
   getAllCurrencies(): Currency[] {
-    return Object.values(CurrencyService.currencies);
+    return Object.values(CurrencyService.CURRENCIES);
   }
 
   getSupportedCurrencies(): CurrencyCode[] {
-    return Object.keys(CurrencyService.currencies) as CurrencyCode[];
+    return Object.keys(CurrencyService.CURRENCIES) as CurrencyCode[];
   }
 
   isSupported(currency: string): boolean {
-    return currency in CurrencyService.currencies;
+    return currency in CurrencyService.CURRENCIES;
   }
 
   format(amount: number, currency: CurrencyCode, locale?: string): string {
@@ -122,15 +127,9 @@ export class CurrencyService {
   getExchangeRate(from: CurrencyCode, to: CurrencyCode): number | null {
     if (from === to) return 1;
     
-    const key = `${from}_${to}`;
-    const rate = this.exchangeRates.get(key);
+    const rate = this.exchangeRates.get(`${from}_${to}`);
     
-    if (rate) {
-      // Check if rate is older than 24 hours
-      const isExpired = Date.now() - rate.timestamp > 24 * 60 * 60 * 1000;
-      if (isExpired) {
-        return null;
-      }
+    if (rate && Date.now() - rate.timestamp < RATE_EXPIRY_MS) {
       return rate.rate;
     }
 
@@ -138,11 +137,7 @@ export class CurrencyService {
     const fromToBase = this.exchangeRates.get(`${from}_${this.baseCurrency}`);
     const baseToTo = this.exchangeRates.get(`${this.baseCurrency}_${to}`);
     
-    if (fromToBase && baseToTo) {
-      return fromToBase.rate * baseToTo.rate;
-    }
-
-    return null;
+    return (fromToBase && baseToTo) ? fromToBase.rate * baseToTo.rate : null;
   }
 
   convert(amount: number, from: CurrencyCode, to: CurrencyCode): number | null {
@@ -262,22 +257,22 @@ export class CurrencyService {
   getCurrencyExposure(balances: Record<CurrencyCode, number>, baseCurrency: CurrencyCode): Array<{ currency: CurrencyCode; amount: number; percentage: number; exchangeRateToBase: number }> {
     const totalInBase = Object.entries(balances).reduce((sum, [currency, amount]) => {
       const converted = this.convert(amount, currency as CurrencyCode, baseCurrency);
-      return sum + (converted || 0);
+      return sum + (converted ?? 0);
     }, 0);
     
-    return Object.entries(balances).map(([currency, amount]) => {
-      const rate = this.getExchangeRate(currency as CurrencyCode, baseCurrency) || 1;
-      const convertedAmount = this.convert(amount as number, currency as CurrencyCode, baseCurrency);
-      const amountInBase = (convertedAmount !== null ? convertedAmount : 0);
-      const percentage = totalInBase > 0 ? (amountInBase / totalInBase) * 100 : 0;
-      
-      return {
-        currency: currency as CurrencyCode,
-        amount: amount as number,
-        percentage,
-        exchangeRateToBase: rate
-      };
-    }).filter(item => item.amount !== 0);
+    return Object.entries(balances)
+      .filter(([_, amount]) => amount !== 0)
+      .map(([currency, amount]) => {
+        const rate = this.getExchangeRate(currency as CurrencyCode, baseCurrency) ?? 1;
+        const amountInBase = this.convert(amount, currency as CurrencyCode, baseCurrency) ?? 0;
+        
+        return {
+          currency: currency as CurrencyCode,
+          amount,
+          percentage: totalInBase > 0 ? (amountInBase / totalInBase) * 100 : 0,
+          exchangeRateToBase: rate
+        };
+      });
   }
 
   updateRates(rates: Array<{ from: CurrencyCode; to: CurrencyCode; rate: number }>, source: string = 'api'): void {
@@ -297,16 +292,17 @@ export class CurrencyService {
     return Date.now() - rate.timestamp;
   }
 
-  areRatesExpired(threshold: number = 24 * 60 * 60 * 1000): boolean {
+  areRatesExpired(threshold: number = RATE_EXPIRY_MS): boolean {
+    const now = Date.now();
     for (const rate of this.exchangeRates.values()) {
-      if (Date.now() - rate.timestamp < threshold) {
+      if (now - rate.timestamp < threshold) {
         return false;
       }
     }
     return true;
   }
 
-  clearExpiredRates(maxAge: number = 24 * 60 * 60 * 1000): void {
+  clearExpiredRates(maxAge: number = RATE_EXPIRY_MS): void {
     const now = Date.now();
     for (const [key, rate] of this.exchangeRates.entries()) {
       if (now - rate.timestamp > maxAge) {
