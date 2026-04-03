@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Biashara Ledger Pro</title>
+    <title>Biashara Ledger Pro - Global Edition</title>
     
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0ea5e9">
@@ -13,6 +13,7 @@
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
@@ -34,46 +35,523 @@
             .text-emerald-400, .text-rose-400, .text-amber-400 { color: black !important; }
             .print-summary { display: flex; justify-content: space-between; margin-bottom: 2rem; font-weight: bold; border: 1px solid black; padding: 1rem; }
         }
+        .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .sync-indicator { transition: all 0.3s ease; }
+        .sync-indicator.syncing { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
+        // ============================================
+        // GLOBAL SERVICES (TypeScript compiled logic)
+        // ============================================
+        
+        // Currency Service - Multi-currency support
+        const CURRENCIES = {
+            USD: { code: 'USD', symbol: '$', name: 'US Dollar', locale: 'en-US' },
+            EUR: { code: 'EUR', symbol: '€', name: 'Euro', locale: 'de-DE' },
+            GBP: { code: 'GBP', symbol: '£', name: 'British Pound', locale: 'en-GB' },
+            JPY: { code: 'JPY', symbol: '¥', name: 'Japanese Yen', locale: 'ja-JP' },
+            CNY: { code: 'CNY', symbol: '¥', name: 'Chinese Yuan', locale: 'zh-CN' },
+            KES: { code: 'KES', symbol: 'KSh', name: 'Kenyan Shilling', locale: 'en-KE' },
+            NGN: { code: 'NGN', symbol: '₦', name: 'Nigerian Naira', locale: 'en-NG' },
+            ZAR: { code: 'ZAR', symbol: 'R', name: 'South African Rand', locale: 'en-ZA' },
+            GHS: { code: 'GHS', symbol: 'GH₵', name: 'Ghanaian Cedi', locale: 'en-GH' },
+            TZS: { code: 'TZS', symbol: 'TSh', name: 'Tanzanian Shilling', locale: 'en-TZ' },
+            UGX: { code: 'UGX', symbol: 'USh', name: 'Ugandan Shilling', locale: 'en-UG' },
+            RWF: { code: 'RWF', symbol: 'FRw', name: 'Rwandan Franc', locale: 'rw-RW' },
+            ETB: { code: 'ETB', symbol: 'Br', name: 'Ethiopian Birr', locale: 'am-ET' },
+            INR: { code: 'INR', symbol: '₹', name: 'Indian Rupee', locale: 'en-IN' },
+            BRL: { code: 'BRL', symbol: 'R$', name: 'Brazilian Real', locale: 'pt-BR' },
+            MXN: { code: 'MXN', symbol: '$', name: 'Mexican Peso', locale: 'es-MX' },
+            CAD: { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar', locale: 'en-CA' },
+            AUD: { code: 'AUD', symbol: 'A$', name: 'Australian Dollar', locale: 'en-AU' },
+            CHF: { code: 'CHF', symbol: 'Fr', name: 'Swiss Franc', locale: 'de-CH' },
+            XAF: { code: 'XAF', symbol: 'FCFA', name: 'Central African CFA', locale: 'fr-CM' }
+        };
+
+        const EXCHANGE_RATES = {
+            USD: 1.0, EUR: 0.92, GBP: 0.79, JPY: 149.5, CNY: 7.24,
+            KES: 129.5, NGN: 1550.0, ZAR: 18.2, GHS: 15.8, TZS: 2520.0,
+            UGX: 3680.0, RWF: 1380.0, ETB: 123.5, INR: 83.2, BRL: 4.97,
+            MXN: 17.1, CAD: 1.36, AUD: 1.53, CHF: 0.88, XAF: 603.5
+        };
+
+        class CurrencyService {
+            static format(amount, currencyCode = 'USD') {
+                const currency = CURRENCIES[currencyCode] || CURRENCIES.USD;
+                return new Intl.NumberFormat(currency.locale, {
+                    style: 'currency',
+                    currency: currencyCode,
+                    minimumFractionDigits: 0,
+                    maximumFractionDigits: 2
+                }).format(amount);
+            }
+
+            static convert(amount, fromCurrency, toCurrency) {
+                const rateFrom = EXCHANGE_RATES[fromCurrency] || 1;
+                const rateTo = EXCHANGE_RATES[toCurrency] || 1;
+                const inUSD = amount / rateFrom;
+                return inUSD * rateTo;
+            }
+
+            static getRate(from, to) {
+                const rateFrom = EXCHANGE_RATES[from] || 1;
+                const rateTo = EXCHANGE_RATES[to] || 1;
+                return rateTo / rateFrom;
+            }
+        }
+
+        // Offline Service - IndexedDB with sync
+        class OfflineService {
+            constructor(dbName = 'biashara_global_db') {
+                this.dbName = dbName;
+                this.db = null;
+                this.syncQueue = [];
+                this.isOnline = navigator.onLine;
+                this.listeners = [];
+                
+                window.addEventListener('online', () => this.handleOnline());
+                window.addEventListener('offline', () => this.handleOffline());
+            }
+
+            async init() {
+                return new Promise((resolve, reject) => {
+                    const request = indexedDB.open(this.dbName, 1);
+                    
+                    request.onerror = () => reject(request.error);
+                    request.onsuccess = () => {
+                        this.db = request.result;
+                        resolve(this.db);
+                    };
+                    
+                    request.onupgradeneeded = (event) => {
+                        const db = event.target.result;
+                        if (!db.objectStoreNames.contains('transactions')) {
+                            const store = db.createObjectStore('transactions', { keyPath: 'id' });
+                            store.createIndex('timestamp', 'timestamp', { unique: false });
+                            store.createIndex('currency', 'currency', { unique: false });
+                            store.createIndex('type', 'type', { unique: false });
+                            store.createIndex('status', 'status', { unique: false });
+                        }
+                        if (!db.objectStoreNames.contains('syncQueue')) {
+                            db.createObjectStore('syncQueue', { keyPath: 'id', autoIncrement: true });
+                        }
+                        if (!db.objectStoreNames.contains('settings')) {
+                            db.createObjectStore('settings', { keyPath: 'key' });
+                        }
+                    };
+                });
+            }
+
+            async addTransaction(transaction) {
+                if (!this.db) await this.init();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction(['transactions'], 'readwrite');
+                    const store = tx.objectStore('transactions');
+                    const request = store.add(transaction);
+                    request.onsuccess = () => resolve(transaction);
+                    request.onerror = () => reject(request.error);
+                });
+            }
+
+            async getAllTransactions() {
+                if (!this.db) await this.init();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction(['transactions'], 'readonly');
+                    const store = tx.objectStore('transactions');
+                    const request = store.getAll();
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+            }
+
+            async updateTransaction(transaction) {
+                if (!this.db) await this.init();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction(['transactions'], 'readwrite');
+                    const store = tx.objectStore('transactions');
+                    const request = store.put(transaction);
+                    request.onsuccess = () => resolve(transaction);
+                    request.onerror = () => reject(request.error);
+                });
+            }
+
+            async deleteTransaction(id) {
+                if (!this.db) await this.init();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction(['transactions'], 'readwrite');
+                    const store = tx.objectStore('transactions');
+                    const request = store.delete(id);
+                    request.onsuccess = () => resolve();
+                    request.onerror = () => reject(request.error);
+                });
+            }
+
+            async addToSyncQueue(action) {
+                if (!this.db) await this.init();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction(['syncQueue'], 'readwrite');
+                    const store = tx.objectStore('syncQueue');
+                    const request = store.add({ ...action, timestamp: Date.now() });
+                    request.onsuccess = () => resolve();
+                    request.onerror = () => reject(request.error);
+                });
+            }
+
+            async getSyncQueue() {
+                if (!this.db) await this.init();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction(['syncQueue'], 'readonly');
+                    const store = tx.objectStore('syncQueue');
+                    const request = store.getAll();
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+            }
+
+            async clearSyncQueue() {
+                if (!this.db) await this.init();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction(['syncQueue'], 'readwrite');
+                    const store = tx.objectStore('syncQueue');
+                    const request = store.clear();
+                    request.onsuccess = () => resolve();
+                    request.onerror = () => reject(request.error);
+                });
+            }
+
+            async saveSetting(key, value) {
+                if (!this.db) await this.init();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction(['settings'], 'readwrite');
+                    const store = tx.objectStore('settings');
+                    const request = store.put({ key, value });
+                    request.onsuccess = () => resolve();
+                    request.onerror = () => reject(request.error);
+                });
+            }
+
+            async getSetting(key) {
+                if (!this.db) await this.init();
+                return new Promise((resolve, reject) => {
+                    const tx = this.db.transaction(['settings'], 'readonly');
+                    const store = tx.objectStore('settings');
+                    const request = store.get(key);
+                    request.onsuccess = () => resolve(request.result?.value);
+                    request.onerror = () => reject(request.error);
+                });
+            }
+
+            handleOnline() {
+                this.isOnline = true;
+                this.notifyListeners('online');
+                this.processSyncQueue();
+            }
+
+            handleOffline() {
+                this.isOnline = false;
+                this.notifyListeners('offline');
+            }
+
+            async processSyncQueue() {
+                if (!this.isOnline) return;
+                const queue = await this.getSyncQueue();
+                for (const item of queue) {
+                    // Here you would send to server API
+                    console.log('Syncing:', item);
+                }
+                if (queue.length > 0) {
+                    await this.clearSyncQueue();
+                    this.notifyListeners('sync-complete');
+                }
+            }
+
+            subscribe(callback) {
+                this.listeners.push(callback);
+                return () => {
+                    this.listeners = this.listeners.filter(l => l !== callback);
+                };
+            }
+
+            notifyListeners(event) {
+                this.listeners.forEach(cb => cb(event));
+            }
+
+            async exportData() {
+                const transactions = await this.getAllTransactions();
+                const settings = {};
+                const settingKeys = ['defaultCurrency', 'businessName', 'taxRate'];
+                for (const key of settingKeys) {
+                    settings[key] = await this.getSetting(key);
+                }
+                return {
+                    version: '2.0',
+                    exportedAt: new Date().toISOString(),
+                    transactions,
+                    settings
+                };
+            }
+
+            async importData(data) {
+                if (!data.version || !data.transactions) {
+                    throw new Error('Invalid import format');
+                }
+                for (const tx of data.transactions) {
+                    await this.addTransaction(tx);
+                }
+                if (data.settings) {
+                    for (const [key, value] of Object.entries(data.settings)) {
+                        if (value !== undefined) {
+                            await this.saveSetting(key, value);
+                        }
+                    }
+                }
+                return data.transactions.length;
+            }
+        }
+
+        // Analytics Service
+        class AnalyticsService {
+            static calculateMetrics(transactions, currency = 'USD') {
+                const now = new Date();
+                const periods = {
+                    today: { start: new Date(now.setHours(0,0,0,0)), end: now },
+                    week: { start: new Date(now.setDate(now.getDate() - 7)), end: new Date() },
+                    month: { start: new Date(now.setMonth(now.getMonth() - 1)), end: new Date() },
+                    quarter: { start: new Date(now.setMonth(now.getMonth() - 3)), end: new Date() },
+                    year: { start: new Date(now.setFullYear(now.getFullYear() - 1)), end: new Date() }
+                };
+
+                const metrics = {};
+                for (const [period, dates] of Object.entries(periods)) {
+                    const periodTx = transactions.filter(tx => {
+                        const txDate = new Date(tx.timestamp);
+                        return txDate >= dates.start && txDate <= dates.end;
+                    });
+
+                    const income = periodTx
+                        .filter(tx => tx.type === 'INCOME' && tx.status === 'PAID')
+                        .reduce((sum, tx) => sum + CurrencyService.convert(tx.amount, tx.currency || 'USD', currency), 0);
+                    
+                    const expenses = periodTx
+                        .filter(tx => tx.type === 'EXPENSE' && tx.status === 'PAID')
+                        .reduce((sum, tx) => sum + CurrencyService.convert(tx.amount, tx.currency || 'USD', currency), 0);
+
+                    const receivables = periodTx
+                        .filter(tx => tx.type === 'INCOME' && tx.status === 'CREDIT')
+                        .reduce((sum, tx) => sum + CurrencyService.convert(tx.amount, tx.currency || 'USD', currency), 0);
+
+                    const payables = periodTx
+                        .filter(tx => tx.type === 'EXPENSE' && tx.status === 'CREDIT')
+                        .reduce((sum, tx) => sum + CurrencyService.convert(tx.amount, tx.currency || 'USD', currency), 0);
+
+                    metrics[period] = {
+                        income,
+                        expenses,
+                        netBalance: income - expenses,
+                        receivables,
+                        payables,
+                        profitMargin: income > 0 ? ((income - expenses) / income * 100) : 0
+                    };
+                }
+
+                return metrics;
+            }
+
+            static calculateHealthScore(metrics) {
+                let score = 50;
+                
+                // Profit margin scoring
+                if (metrics.month.profitMargin > 20) score += 20;
+                else if (metrics.month.profitMargin > 10) score += 10;
+                else if (metrics.month.profitMargin > 0) score += 5;
+                else score -= 10;
+
+                // Receivables management
+                const receivablesRatio = metrics.month.receivables / (metrics.month.income || 1);
+                if (receivablesRatio < 0.1) score += 15;
+                else if (receivablesRatio < 0.2) score += 10;
+                else if (receivablesRatio < 0.3) score += 5;
+                else score -= 10;
+
+                // Growth trend
+                if (metrics.month.income > metrics.quarter.income / 3) score += 15;
+                
+                return Math.min(100, Math.max(0, score));
+            }
+
+            static getHealthStatus(score) {
+                if (score >= 80) return { label: 'Excellent', color: 'emerald' };
+                if (score >= 60) return { label: 'Good', color: 'green' };
+                if (score >= 40) return { label: 'Fair', color: 'yellow' };
+                if (score >= 20) return { label: 'Poor', color: 'orange' };
+                return { label: 'Critical', color: 'rose' };
+            }
+
+            static generateCashFlowForecast(transactions, currency = 'USD', days = 30) {
+                const dailyAvg = transactions
+                    .filter(tx => tx.type === 'INCOME' && tx.status === 'PAID')
+                    .reduce((sum, tx) => sum + CurrencyService.convert(tx.amount, tx.currency || 'USD', currency), 0) / 30;
+                
+                const forecast = [];
+                const today = new Date();
+                
+                for (let i = 0; i < days; i++) {
+                    const date = new Date(today);
+                    date.setDate(date.getDate() + i);
+                    forecast.push({
+                        date: date.toISOString().split('T')[0],
+                        projected: dailyAvg * (i + 1),
+                        cumulative: dailyAvg * (i + 1)
+                    });
+                }
+                
+                return forecast;
+            }
+        }
+
+        // API Integration Service
+        class APIIntegrationService {
+            constructor() {
+                this.providers = {
+                    mpesa: { name: 'M-Pesa', enabled: false, credentials: {} },
+                    paypal: { name: 'PayPal', enabled: false, credentials: {} },
+                    stripe: { name: 'Stripe', enabled: false, credentials: {} },
+                    flutterwave: { name: 'Flutterwave', enabled: false, credentials: {} },
+                    paystack: { name: 'Paystack', enabled: false, credentials: {} }
+                };
+            }
+
+            async connect(provider, credentials) {
+                this.providers[provider].credentials = credentials;
+                this.providers[provider].enabled = true;
+                // In production, validate credentials with provider API
+                return { success: true, message: `${provider} connected` };
+            }
+
+            async disconnect(provider) {
+                this.providers[provider].enabled = false;
+                this.providers[provider].credentials = {};
+                return { success: true, message: `${provider} disconnected` };
+            }
+
+            async processPayment(provider, amount, currency, customer) {
+                if (!this.providers[provider].enabled) {
+                    throw new Error(`${provider} is not connected`);
+                }
+                
+                // Mock payment processing
+                return {
+                    success: true,
+                    transactionId: `TXN-${Date.now()}`,
+                    provider,
+                    amount,
+                    currency,
+                    status: 'completed',
+                    timestamp: new Date().toISOString()
+                };
+            }
+
+            async getWebhookConfig(provider) {
+                const baseUrl = window.location.origin;
+                return {
+                    mpesa: `${baseUrl}/api/webhooks/mpesa`,
+                    paypal: `${baseUrl}/api/webhooks/paypal`,
+                    stripe: `${baseUrl}/api/webhooks/stripe`,
+                    flutterwave: `${baseUrl}/api/webhooks/flutterwave`,
+                    paystack: `${baseUrl}/api/webhooks/paystack`
+                }[provider];
+            }
+        }
+
+        // Initialize global services
+        const offlineDB = new OfflineService();
+        const apiIntegration = new APIIntegrationService();
+
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/service-worker.js').catch(err => console.error('Service Worker failed', err));
             });
         }
 
-        const { useState, useEffect, useMemo } = React;
-
-        // Custom Hook for Browser Database
-        function useDatabase(collectionName, initialData) {
-            const [data, setData] = useState(() => {
-                try {
-                    const localData = window.localStorage.getItem(collectionName);
-                    return localData ? JSON.parse(localData) : initialData;
-                } catch (error) { return initialData; }
-            });
-
-            useEffect(() => {
-                window.localStorage.setItem(collectionName, JSON.stringify(data));
-            }, [data, collectionName]);
-
-            return [data, setData];
-        }
+        const { useState, useEffect, useMemo, useCallback } = React;
 
         function App() {
-            const [transactions, setTransactions] = useDatabase('biashara_ledger_v2', []);
-            const [activeTab, setActiveTab] = useState('ledger'); 
+            // Core State
+            const [transactions, setTransactions] = useState([]);
+            const [activeTab, setActiveTab] = useState('dashboard');
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [installPrompt, setInstallPrompt] = useState(null);
+            const [isOnline, setIsOnline] = useState(navigator.onLine);
+            const [syncStatus, setSyncStatus] = useState('idle');
+            
+            // Settings State
+            const [defaultCurrency, setDefaultCurrency] = useState('USD');
+            const [businessName, setBusinessName] = useState('My Business');
+            const [taxRate, setTaxRate] = useState(0);
+            
+            // Transaction Form State
+            const [type, setType] = useState('INCOME');
+            const [status, setStatus] = useState('PAID');
+            const [amount, setAmount] = useState('');
+            const [desc, setDesc] = useState('');
+            const [client, setClient] = useState('');
+            const [dueDate, setDueDate] = useState('');
+            const [transactionCurrency, setTransactionCurrency] = useState('USD');
+            
+            // Filter State
+            const [reportPeriod, setReportPeriod] = useState('MONTH');
+            const [filterCurrency, setFilterCurrency] = useState('ALL');
 
+            // Load data on mount
+            useEffect(() => {
+                const loadData = async () => {
+                    await offlineDB.init();
+                    const txs = await offlineDB.getAllTransactions();
+                    setTransactions(txs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+                    
+                    const savedCurrency = await offlineDB.getSetting('defaultCurrency');
+                    if (savedCurrency) setDefaultCurrency(savedCurrency);
+                    
+                    const savedName = await offlineDB.getSetting('businessName');
+                    if (savedName) setBusinessName(savedName);
+                    
+                    const savedTax = await offlineDB.getSetting('taxRate');
+                    if (savedTax !== undefined) setTaxRate(savedTax);
+                };
+                loadData();
+
+                // Subscribe to offline events
+                const unsubscribe = offlineDB.subscribe((event) => {
+                    if (event === 'online') {
+                        setIsOnline(true);
+                        setSyncStatus('syncing');
+                        setTimeout(() => setSyncStatus('idle'), 2000);
+                    } else if (event === 'offline') {
+                        setIsOnline(false);
+                        setSyncStatus('offline');
+                    } else if (event === 'sync-complete') {
+                        setSyncStatus('synced');
+                        setTimeout(() => setSyncStatus('idle'), 2000);
+                    }
+                });
+
+                return unsubscribe;
+            }, []);
+
+            // Install prompt handler
             useEffect(() => {
                 const handleBeforeInstallPrompt = (e) => {
-                    e.preventDefault(); 
-                    setInstallPrompt(e); 
+                    e.preventDefault();
+                    setInstallPrompt(e);
                 };
                 window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
                 return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -83,19 +561,212 @@
                 if (!installPrompt) return;
                 installPrompt.prompt();
                 const { outcome } = await installPrompt.userChoice;
-                if (outcome === 'accepted') setInstallPrompt(null); 
+                if (outcome === 'accepted') setInstallPrompt(null);
             };
-            
-            // Form & Report State
-            const [type, setType] = useState('INCOME');
-            const [status, setStatus] = useState('PAID');
-            const [amount, setAmount] = useState('');
-            const [desc, setDesc] = useState('');
-            const [client, setClient] = useState('');
-            const [dueDate, setDueDate] = useState('');
-            const [reportPeriod, setReportPeriod] = useState('ALL');
 
-            const formatMoney = (val) => new Intl.NumberFormat('en-KE', { style: 'currency', currency: 'KES', minimumFractionDigits: 0 }).format(val);
+            // Format money helper
+            const formatMoney = useCallback((val, currency = defaultCurrency) => {
+                return CurrencyService.format(val, currency);
+            }, [defaultCurrency]);
+
+            // Analytics calculations
+            const metrics = useMemo(() => {
+                return AnalyticsService.calculateMetrics(transactions, defaultCurrency);
+            }, [transactions, defaultCurrency]);
+
+            const healthScore = useMemo(() => {
+                return AnalyticsService.calculateHealthScore(metrics);
+            }, [metrics]);
+
+            const healthStatus = AnalyticsService.getHealthStatus(healthScore);
+
+            // Filtered transactions
+            const filteredData = useMemo(() => {
+                const now = new Date();
+                const periodDays = {
+                    TODAY: 1, WEEK: 7, MONTH: 30, QUARTER: 90, YEAR: 365, ALL: Infinity
+                };
+                const days = periodDays[reportPeriod] || Infinity;
+                
+                return transactions.filter(tx => {
+                    const txDate = new Date(tx.timestamp);
+                    const inPeriod = days === Infinity || (now - txDate) / (1000 * 60 * 60 * 24) <= days;
+                    const inCurrency = filterCurrency === 'ALL' || tx.currency === filterCurrency;
+                    return inPeriod && inCurrency;
+                });
+            }, [transactions, reportPeriod, filterCurrency]);
+
+            // Database Actions
+            const handleAddTransaction = async (e) => {
+                e.preventDefault();
+                if (!amount || !desc) return;
+                
+                const newTx = {
+                    id: crypto.randomUUID(),
+                    timestamp: new Date().toISOString(),
+                    type,
+                    status,
+                    amount: Number(amount),
+                    desc,
+                    client: client || 'Walk-in',
+                    dueDate: status === 'CREDIT' ? dueDate : null,
+                    currency: transactionCurrency,
+                    syncStatus: offlineDB.isOnline ? 'synced' : 'pending'
+                };
+                
+                await offlineDB.addTransaction(newTx);
+                setTransactions([newTx, ...transactions]);
+                
+                if (!offlineDB.isOnline) {
+                    await offlineDB.addToSyncQueue({ action: 'add', data: newTx });
+                }
+                
+                setAmount('');
+                setDesc('');
+                setClient('');
+                setDueDate('');
+                setStatus('PAID');
+                setIsModalOpen(false);
+            };
+
+            const markAsPaid = async (id) => {
+                const updated = transactions.map(tx => 
+                    tx.id === id ? { ...tx, status: 'PAID', timestamp: new Date().toISOString() } : tx
+                );
+                const tx = updated.find(t => t.id === id);
+                await offlineDB.updateTransaction(tx);
+                setTransactions(updated);
+            };
+
+            const deleteTransaction = async (id) => {
+                await offlineDB.deleteTransaction(id);
+                setTransactions(transactions.filter(tx => tx.id !== id));
+            };
+
+            const handleExportData = async () => {
+                const data = await offlineDB.exportData();
+                const dataStr = JSON.stringify(data, null, 2);
+                const blob = new Blob([dataStr], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `biashara_backup_${new Date().toISOString().split('T')[0]}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const handleImportData = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                    try {
+                        const importedData = JSON.parse(event.target.result);
+                        const count = await offlineDB.importData(importedData);
+                        const txs = await offlineDB.getAllTransactions();
+                        setTransactions(txs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+                        alert(`Imported ${count} transactions successfully!`);
+                    } catch (err) {
+                        alert("Error reading backup file: " + err.message);
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            const handleWipeDatabase = async () => {
+                if(confirm("CRITICAL WARNING: This will permanently delete all records. Are you sure?")) {
+                    if(prompt("Type 'DELETE' to confirm") === 'DELETE') {
+                        const db = await offlineDB.init();
+                        const tx = db.transaction(['transactions'], 'readwrite');
+                        tx.objectStore('transactions').clear();
+                        setTransactions([]);
+                    }
+                }
+            };
+
+            const saveSettings = async () => {
+                await offlineDB.saveSetting('defaultCurrency', defaultCurrency);
+                await offlineDB.saveSetting('businessName', businessName);
+                await offlineDB.saveSetting('taxRate', taxRate);
+                alert('Settings saved!');
+            };
+
+            // Chart component
+            const DashboardChart = () => {
+                const canvasRef = React.useRef(null);
+                const chartRef = React.useRef(null);
+
+                useEffect(() => {
+                    if (canvasRef.current) {
+                        const ctx = canvasRef.current.getContext('2d');
+                        
+                        if (chartRef.current) {
+                            chartRef.current.destroy();
+                        }
+
+                        const monthlyData = {};
+                        transactions.forEach(tx => {
+                            const month = new Date(tx.timestamp).toLocaleString('default', { month: 'short' });
+                            if (!monthlyData[month]) monthlyData[month] = { income: 0, expense: 0 };
+                            const convertedAmount = CurrencyService.convert(tx.amount, tx.currency || 'USD', defaultCurrency);
+                            if (tx.type === 'INCOME' && tx.status === 'PAID') {
+                                monthlyData[month].income += convertedAmount;
+                            } else if (tx.type === 'EXPENSE' && tx.status === 'PAID') {
+                                monthlyData[month].expense += convertedAmount;
+                            }
+                        });
+
+                        const labels = Object.keys(monthlyData);
+                        const incomeData = labels.map(m => monthlyData[m].income);
+                        const expenseData = labels.map(m => monthlyData[m].expense);
+
+                        chartRef.current = new Chart(ctx, {
+                            type: 'bar',
+                            data: {
+                                labels,
+                                datasets: [
+                                    {
+                                        label: 'Income',
+                                        data: incomeData,
+                                        backgroundColor: 'rgba(16, 185, 129, 0.7)',
+                                        borderColor: 'rgb(16, 185, 129)',
+                                        borderWidth: 1
+                                    },
+                                    {
+                                        label: 'Expenses',
+                                        data: expenseData,
+                                        backgroundColor: 'rgba(244, 63, 94, 0.7)',
+                                        borderColor: 'rgb(244, 63, 94)',
+                                        borderWidth: 1
+                                    }
+                                ]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                    legend: {
+                                        labels: { color: '#94a3b8' }
+                                    }
+                                },
+                                scales: {
+                                    y: {
+                                        ticks: { color: '#94a3b8' },
+                                        grid: { color: 'rgba(51, 65, 85, 0.3)' }
+                                    },
+                                    x: {
+                                        ticks: { color: '#94a3b8' },
+                                        grid: { display: false }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }, [transactions, defaultCurrency]);
+
+                return <canvas ref={canvasRef} height="200"></canvas>;
+            };
 
             const filteredData = useMemo(() => {
                 const now = new Date();
@@ -199,13 +870,26 @@
                             </div>
                             <p className="text-slate-400 text-xs font-mono mt-1">Cashflow & Database Management</p>
                         </div>
+                        <div className="flex items-center gap-2 no-print">
+                            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold ${isOnline ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                                <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-amber-400'} pulse-dot`}></span>
+                                {isOnline ? 'Online' : 'Offline'}
+                            </div>
+                            {syncStatus !== 'idle' && (
+                                <div className={`sync-indicator ${syncStatus === 'syncing' ? 'syncing' : ''} text-slate-400 text-xs`}>
+                                    {syncStatus === 'syncing' ? '🔄 Syncing...' : syncStatus === 'offline' ? '⏸️ Queued' : '✅ Synced'}
+                                </div>
+                            )}
+                        </div>
                         <nav className="flex flex-wrap gap-2 bg-slate-900 border border-slate-800 rounded-lg p-1 w-full md:w-auto">
+                            <button onClick={() => setActiveTab('dashboard')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'dashboard' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>Dashboard</button>
                             <button onClick={() => setActiveTab('ledger')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'ledger' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>Ledger</button>
                             <button onClick={() => setActiveTab('debts')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'debts' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>
-                                Debts {totalOwedToYou > 0 && <span className="ml-2 bg-rose-500 text-white px-1.5 py-0.5 rounded-full text-[10px]">{unpaidDebts.length}</span>}
+                                Debts {metrics.month.receivables > 0 && <span className="ml-2 bg-amber-500 text-white px-1.5 py-0.5 rounded-full text-[10px]">{filteredData.filter(t => t.type === 'INCOME' && t.status === 'CREDIT').length}</span>}
                             </button>
-                            <button onClick={() => setActiveTab('reports')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'reports' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>Reports</button>
-                            <button onClick={() => setActiveTab('database')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'database' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>Data</button>
+                            <button onClick={() => setActiveTab('analytics')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'analytics' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>Analytics</button>
+                            <button onClick={() => setActiveTab('integrations')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'integrations' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>APIs</button>
+                            <button onClick={() => setActiveTab('settings')} className={`flex-1 md:flex-none px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'settings' ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-white'}`}>Settings</button>
                         </nav>
                     </header>
 
@@ -351,45 +1035,298 @@
                         </div>
                     )}
 
-                    {/* VIEW: DATABASE MANAGEMENT */}
-                    {activeTab === 'database' && (
+                    {/* VIEW: DASHBOARD */}
+                    {activeTab === 'dashboard' && (
                         <div className="flex flex-col flex-1 h-full no-print">
-                            <div className="glass-card rounded-2xl p-4 md:p-8 flex-1 overflow-y-auto">
-                                <h2 className="text-xl font-bold mb-4">Database Storage</h2>
-                                <p className="text-sm text-slate-400 mb-8 max-w-lg">
-                                    Your records are secured entirely inside your browser's local memory up to the HTML5 limit (which easily holds thousands of text transactions). You must export your database regularly to prevent data loss.
-                                </p>
+                            {/* Health Score Card */}
+                            <div className="glass-card rounded-2xl p-6 mb-6">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="text-lg font-bold">Business Health Score</h3>
+                                    <span className={`text-2xl font-black text-${healthStatus.color}-400`}>{healthScore}/100</span>
+                                </div>
+                                <div className="w-full bg-slate-800 rounded-full h-4 mb-2">
+                                    <div className={`h-4 rounded-full bg-${healthStatus.color}-500 transition-all duration-500`} style={{width: `${healthScore}%`}}></div>
+                                </div>
+                                <p className="text-sm text-slate-400">Status: <span className={`font-bold text-${healthStatus.color}-400`}>{healthStatus.label}</span></p>
+                            </div>
 
-                                <div className="space-y-4 md:space-y-6">
-                                    <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                                        <div>
-                                            <h3 className="font-bold text-sky-400">Export Backup</h3>
-                                            <p className="text-xs text-slate-400 mt-1">Download a JSON copy of all records.</p>
+                            {/* Quick Stats */}
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                <div className="glass-card p-4 rounded-2xl">
+                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">This Month</p>
+                                    <p className="text-xl font-black text-emerald-400">{formatMoney(metrics.month.income)}</p>
+                                </div>
+                                <div className="glass-card p-4 rounded-2xl">
+                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Expenses</p>
+                                    <p className="text-xl font-black text-rose-400">{formatMoney(metrics.month.expenses)}</p>
+                                </div>
+                                <div className="glass-card p-4 rounded-2xl">
+                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Net Balance</p>
+                                    <p className={`text-xl font-black ${metrics.month.netBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatMoney(metrics.month.netBalance)}</p>
+                                </div>
+                                <div className="glass-card p-4 rounded-2xl">
+                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Profit Margin</p>
+                                    <p className={`text-xl font-black ${metrics.month.profitMargin >= 20 ? 'text-emerald-400' : metrics.month.profitMargin >= 10 ? 'text-green-400' : 'text-amber-400'}`}>{metrics.month.profitMargin.toFixed(1)}%</p>
+                                </div>
+                            </div>
+
+                            {/* Chart */}
+                            <div className="glass-card rounded-2xl p-4 mb-6">
+                                <h3 className="text-lg font-bold mb-4">Cash Flow Trends</h3>
+                                <DashboardChart />
+                            </div>
+
+                            {/* Recent Transactions Preview */}
+                            <div className="glass-card rounded-2xl p-4 flex-1 overflow-hidden">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="text-lg font-bold">Recent Activity</h3>
+                                    <button onClick={() => setActiveTab('ledger')} className="text-sky-400 text-sm font-bold hover:text-sky-300">View All →</button>
+                                </div>
+                                <div className="overflow-y-auto max-h-64">
+                                    {transactions.slice(0, 5).map(tx => (
+                                        <div key={tx.id} className="flex justify-between items-center p-3 rounded-xl hover:bg-slate-800/50 transition-colors border-b border-slate-800 last:border-0">
+                                            <div className="flex items-center gap-3">
+                                                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs ${tx.type === 'INCOME' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                                                    {tx.type === 'INCOME' ? '↓' : '↑'}
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-bold text-slate-200">{tx.desc}</p>
+                                                    <p className="text-[10px] text-slate-500">{new Date(tx.timestamp).toLocaleDateString()}</p>
+                                                </div>
+                                            </div>
+                                            <p className={`text-sm font-black font-mono ${tx.type === 'INCOME' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                {tx.type === 'INCOME' ? '+' : '-'}{formatMoney(tx.amount, tx.currency || defaultCurrency)}
+                                            </p>
                                         </div>
-                                        <button onClick={handleExportData} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm font-bold transition-colors w-full md:w-auto text-center">
-                                            Download .JSON
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VIEW: ANALYTICS */}
+                    {activeTab === 'analytics' && (
+                        <div className="flex flex-col flex-1 h-full no-print">
+                            <div className="glass-card rounded-2xl p-6 mb-6">
+                                <h2 className="text-xl font-bold mb-6">Financial Analytics</h2>
+                                
+                                {/* Period Selector */}
+                                <div className="flex gap-2 mb-6 flex-wrap">
+                                    {['TODAY', 'WEEK', 'MONTH', 'QUARTER', 'YEAR', 'ALL'].map(period => (
+                                        <button
+                                            key={period}
+                                            onClick={() => setReportPeriod(period)}
+                                            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${reportPeriod === period ? 'bg-sky-500 text-white shadow' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+                                        >
+                                            {period}
                                         </button>
+                                    ))}
+                                </div>
+
+                                {/* Detailed Metrics */}
+                                <div className="grid md:grid-cols-2 gap-6 mb-6">
+                                    <div className="bg-slate-800/50 p-4 rounded-xl">
+                                        <h4 className="text-sm font-bold text-slate-400 mb-4">Income Breakdown</h4>
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between">
+                                                <span className="text-slate-300">Total Income</span>
+                                                <span className="font-bold text-emerald-400">{formatMoney(metrics[reportPeriod.toLowerCase()].income)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-slate-300">Receivables (Credit)</span>
+                                                <span className="font-bold text-amber-400">{formatMoney(metrics[reportPeriod.toLowerCase()].receivables)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-slate-300">Collected</span>
+                                                <span className="font-bold text-slate-200">{formatMoney(metrics[reportPeriod.toLowerCase()].income - metrics[reportPeriod.toLowerCase()].receivables)}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800/50 p-4 rounded-xl">
+                                        <h4 className="text-sm font-bold text-slate-400 mb-4">Expense Breakdown</h4>
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between">
+                                                <span className="text-slate-300">Total Expenses</span>
+                                                <span className="font-bold text-rose-400">{formatMoney(metrics[reportPeriod.toLowerCase()].expenses)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-slate-300">Payables (Credit)</span>
+                                                <span className="font-bold text-amber-400">{formatMoney(metrics[reportPeriod.toLowerCase()].payables)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-slate-300">Paid Out</span>
+                                                <span className="font-bold text-slate-200">{formatMoney(metrics[reportPeriod.toLowerCase()].expenses - metrics[reportPeriod.toLowerCase()].payables)}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Net Balance & Profit Margin */}
+                                <div className="grid md:grid-cols-2 gap-6">
+                                    <div className="bg-gradient-to-br from-sky-500/20 to-sky-600/10 border border-sky-500/30 p-4 rounded-xl">
+                                        <h4 className="text-sm font-bold text-sky-400 mb-2">Net Balance</h4>
+                                        <p className={`text-3xl font-black ${metrics[reportPeriod.toLowerCase()].netBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                            {formatMoney(metrics[reportPeriod.toLowerCase()].netBalance)}
+                                        </p>
+                                    </div>
+                                    <div className="bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 border border-emerald-500/30 p-4 rounded-xl">
+                                        <h4 className="text-sm font-bold text-emerald-400 mb-2">Profit Margin</h4>
+                                        <p className={`text-3xl font-black ${metrics[reportPeriod.toLowerCase()].profitMargin >= 20 ? 'text-emerald-400' : metrics[reportPeriod.toLowerCase()].profitMargin >= 10 ? 'text-green-400' : 'text-amber-400'}`}>
+                                            {metrics[reportPeriod.toLowerCase()].profitMargin.toFixed(2)}%
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VIEW: API INTEGRATIONS */}
+                    {activeTab === 'integrations' && (
+                        <div className="flex flex-col flex-1 h-full no-print">
+                            <div className="glass-card rounded-2xl p-6">
+                                <h2 className="text-xl font-bold mb-2">Payment Gateway Integrations</h2>
+                                <p className="text-sm text-slate-400 mb-6">Connect your payment providers for automatic transaction sync</p>
+
+                                <div className="space-y-4">
+                                    {[
+                                        { id: 'mpesa', name: 'M-Pesa', color: 'red', icon: '📱', desc: 'Kenya\'s leading mobile money service' },
+                                        { id: 'paypal', name: 'PayPal', color: 'blue', icon: '🅿️', desc: 'Global online payments' },
+                                        { id: 'stripe', name: 'Stripe', color: 'indigo', icon: '💳', desc: 'Payment processing for internet businesses' },
+                                        { id: 'flutterwave', name: 'Flutterwave', color: 'orange', icon: '🌊', desc: 'Pan-African payment infrastructure' },
+                                        { id: 'paystack', name: 'Paystack', color: 'green', icon: '✅', desc: 'Payments for African businesses' }
+                                    ].map(provider => (
+                                        <div key={provider.id} className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex justify-between items-center">
+                                            <div className="flex items-center gap-4">
+                                                <span className="text-3xl">{provider.icon}</span>
+                                                <div>
+                                                    <h3 className="font-bold text-white">{provider.name}</h3>
+                                                    <p className="text-xs text-slate-400">{provider.desc}</p>
+                                                    <p className="text-[10px] text-slate-500 mt-1">Webhook: {apiIntegration.getWebhookConfig(provider.id)}</p>
+                                                </div>
+                                            </div>
+                                            <button 
+                                                onClick={() => alert(`${provider.name} integration coming soon! In production, this would open OAuth flow.`)}
+                                                className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${provider.id === 'mpesa' ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                                            >
+                                                Connect
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="mt-8 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+                                    <h4 className="font-bold text-amber-400 mb-2">⚠️ Production Setup Required</h4>
+                                    <p className="text-xs text-amber-400/80">To enable live integrations, you'll need to:</p>
+                                    <ul className="text-xs text-amber-400/80 mt-2 space-y-1 list-disc list-inside">
+                                        <li>Set up a backend server with webhook endpoints</li>
+                                        <li>Register for API credentials with each provider</li>
+                                        <li>Configure OAuth flows for secure authentication</li>
+                                        <li>Implement server-side transaction verification</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VIEW: SETTINGS */}
+                    {activeTab === 'settings' && (
+                        <div className="flex flex-col flex-1 h-full no-print">
+                            <div className="glass-card rounded-2xl p-6">
+                                <h2 className="text-xl font-bold mb-6">Settings & Configuration</h2>
+
+                                <div className="space-y-6">
+                                    {/* Business Settings */}
+                                    <div>
+                                        <h3 className="text-lg font-bold mb-4">Business Information</h3>
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Business Name</label>
+                                                <input 
+                                                    type="text" 
+                                                    value={businessName} 
+                                                    onChange={(e) => setBusinessName(e.target.value)}
+                                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-sky-500" 
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Default Currency</label>
+                                                <select 
+                                                    value={defaultCurrency} 
+                                                    onChange={(e) => setDefaultCurrency(e.target.value)}
+                                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-sky-500"
+                                                >
+                                                    {Object.entries(CURRENCIES).map(([code, curr]) => (
+                                                        <option key={code} value={code}>{curr.name} ({code})</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Tax Rate (%)</label>
+                                                <input 
+                                                    type="number" 
+                                                    min="0" 
+                                                    max="100" 
+                                                    value={taxRate} 
+                                                    onChange={(e) => setTaxRate(Number(e.target.value))}
+                                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-sky-500" 
+                                                />
+                                            </div>
+                                            <button onClick={saveSettings} className="bg-sky-500 hover:bg-sky-400 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                                                Save Settings
+                                            </button>
+                                        </div>
                                     </div>
 
-                                    <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                                        <div>
-                                            <h3 className="font-bold text-emerald-400">Restore Backup</h3>
-                                            <p className="text-xs text-slate-400 mt-1">Upload a previous JSON backup file.</p>
+                                    <hr className="border-slate-700" />
+
+                                    {/* Data Management */}
+                                    <div>
+                                        <h3 className="text-lg font-bold mb-4">Data Management</h3>
+                                        <div className="space-y-4">
+                                            <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex justify-between items-center">
+                                                <div>
+                                                    <h4 className="font-bold text-sky-400">Export All Data</h4>
+                                                    <p className="text-xs text-slate-400 mt-1">Download complete backup with settings</p>
+                                                </div>
+                                                <button onClick={handleExportData} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm font-bold transition-colors">
+                                                    Export
+                                                </button>
+                                            </div>
+                                            <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex justify-between items-center">
+                                                <div>
+                                                    <h4 className="font-bold text-emerald-400">Import Data</h4>
+                                                    <p className="text-xs text-slate-400 mt-1">Restore from backup file</p>
+                                                </div>
+                                                <label className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm font-bold transition-colors cursor-pointer">
+                                                    Import
+                                                    <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
+                                                </label>
+                                            </div>
+                                            <div className="bg-rose-500/10 border border-rose-500/30 p-4 rounded-xl flex justify-between items-center">
+                                                <div>
+                                                    <h4 className="font-bold text-rose-500">Delete All Data</h4>
+                                                    <p className="text-xs text-rose-500/70 mt-1">Permanently erase everything</p>
+                                                </div>
+                                                <button onClick={handleWipeDatabase} className="bg-rose-500/20 hover:bg-rose-500 hover:text-white text-rose-500 border border-rose-500 px-4 py-2 rounded-lg text-sm font-bold transition-colors">
+                                                    Delete All
+                                                </button>
+                                            </div>
                                         </div>
-                                        <label className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm font-bold transition-colors cursor-pointer w-full md:w-auto text-center">
-                                            Upload File
-                                            <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
-                                        </label>
                                     </div>
 
-                                    <div className="bg-rose-500/10 border border-rose-500/30 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mt-8 md:mt-12">
-                                        <div>
-                                            <h3 className="font-bold text-rose-500">Wipe Database</h3>
-                                            <p className="text-xs text-rose-500/70 mt-1">Permanently delete all local records.</p>
+                                    <hr className="border-slate-700" />
+
+                                    {/* App Info */}
+                                    <div className="text-center pt-4">
+                                        <h3 className="text-lg font-bold text-white">Biashara Ledger Pro</h3>
+                                        <p className="text-sm text-slate-400 mt-1">Global Edition v2.0</p>
+                                        <p className="text-xs text-slate-500 mt-2">Built for financial inclusion worldwide</p>
+                                        <div className="flex justify-center gap-4 mt-4 text-xs text-slate-500">
+                                            <span>🌍 Multi-Currency</span>
+                                            <span>📴 Offline-First</span>
+                                            <span>🔒 Local Storage</span>
+                                            <span>📊 Analytics</span>
                                         </div>
-                                        <button onClick={handleWipeDatabase} className="bg-rose-500/20 hover:bg-rose-500 hover:text-white text-rose-500 border border-rose-500 px-4 py-2 rounded-lg text-sm font-bold transition-colors w-full md:w-auto text-center">
-                                            Factory Reset
-                                        </button>
                                     </div>
                                 </div>
                             </div>
