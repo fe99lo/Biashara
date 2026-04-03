@@ -2,7 +2,7 @@
 
 **Empowering Micro-Businesses Worldwide with Offline-First, Multi-Currency Financial Management**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Tests Passing](https://img.shields.io/badge/tests-53%20passing-brightgreen)]()
 [![Coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)]()
 [![TypeScript](https://img.shields.io/badge/language-TypeScript-blue)]()
@@ -346,9 +346,15 @@ We welcome contributors from around the world! Whether you are a developer, desi
 
 ## 📄 License
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** - see the [LICENSE](LICENSE) file for details.
 
-*Free to use, modify, and distribute. Let's empower businesses together.*
+**Key Terms:**
+- ✅ Free to use, modify, and distribute
+- ✅ Can be used for commercial purposes
+- ⚠️ Any modifications made available as a service (SaaS) must also be open-sourced under AGPL-3.0
+- ⚠️ Derivative works must be licensed under the same terms (copyleft)
+
+*This license protects your right to use this software while ensuring improvements remain open-source. For alternative commercial licensing options, please contact us.*
 
 ---
 
