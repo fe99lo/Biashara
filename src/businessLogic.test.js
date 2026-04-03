@@ -498,9 +498,15 @@ describe('Advanced Edge Cases', () => {
         expect(result).toBeGreaterThanOrEqual(0);
     });
 
-    test('should handle special characters in transaction description', () => {
+    test('should sanitize special characters in transaction description to prevent XSS', () => {
         const tx = createTransaction('INCOME', 'PAID', 100, 'Sale with "quotes" and \'apostrophes\' & <tags>');
-        expect(tx.desc).toBe('Sale with "quotes" and \'apostrophes\' & <tags>');
+        expect(tx.desc).toBe('Sale with &quot;quotes&quot; and &#x27;apostrophes&#x27; & &lt;tags&gt;');
+    });
+    
+    test('should sanitize script tags in description', () => {
+        const tx = createTransaction('INCOME', 'PAID', 100, '<script>alert("XSS")</script>');
+        expect(tx.desc).toBe('&lt;script&gt;alert(&quot;XSS&quot;)&lt;&#x2F;script&gt;');
+        expect(tx.desc).not.toContain('<script>');
     });
 
     test('should handle unicode characters in client name', () => {

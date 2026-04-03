@@ -2,13 +2,16 @@ module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'jsdom',
   roots: ['<rootDir>/src'],
-  testMatch: ['**/*.test.ts'],
+  testMatch: ['**/*.test.ts', '**/*.test.js'],
   transform: {
-    '^.+\\.tsx?$': 'ts-jest'
+    '^.+\\.tsx?$': 'ts-jest',
+    '^.+\\.jsx?$': 'babel-jest'
   },
   collectCoverageFrom: [
     'src/**/*.ts',
+    'src/**/*.js',
     '!src/**/*.test.ts',
+    '!src/**/*.test.js',
     '!src/**/*.d.ts'
   ],
   coverageReporters: ['text', 'lcov', 'html'],

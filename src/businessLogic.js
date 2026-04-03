@@ -189,16 +189,67 @@ function calculateTotalYouOwe(unpaidLiabilities) {
  * Creates a new transaction object
  */
 function createTransaction(type, status, amount, desc, client, dueDate) {
+    // Use cryptographically secure ID generation
+    let id;
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        id = crypto.randomUUID();
+    } else if (typeof require !== 'undefined') {
+        // Node.js environment fallback
+        try {
+            const cryptoModule = require('crypto');
+            id = cryptoModule.randomUUID();
+        } catch (e) {
+            // Ultimate fallback using secure random bytes
+            const array = new Uint8Array(16);
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                crypto.getRandomValues(array);
+            } else {
+                // Last resort - use timestamp with random component
+                for (let i = 0; i < 16; i++) {
+                    array[i] = Math.floor(Math.random() * 256);
+                }
+            }
+            id = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('-');
+        }
+    } else {
+        // Browser fallback with better randomness
+        const array = new Uint8Array(16);
+        if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+            crypto.getRandomValues(array);
+        } else {
+            for (let i = 0; i < 16; i++) {
+                array[i] = Math.floor(Math.random() * 256);
+            }
+        }
+        id = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('-');
+    }
+    
     return {
-        id: crypto.randomUUID ? crypto.randomUUID() : `tx-${Date.now()}-${Math.random()}`,
+        id,
         timestamp: new Date().toISOString(),
         type,
         status,
         amount: Number(amount),
-        desc,
-        client: client || 'Walk-in',
+        desc: sanitizeInput(desc),
+        client: sanitizeInput(client || 'Walk-in'),
         dueDate: status === 'CREDIT' ? dueDate : null
     };
+}
+
+/**
+ * Sanitizes user input to prevent XSS attacks
+ */
+function sanitizeInput(input) {
+    if (typeof input !== 'string') {
+        return input;
+    }
+    // Remove potentially dangerous HTML/script tags
+    return input
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#x27;')
+        .replace(/\//g, '&#x2F;');
 }
 
 /**
@@ -213,20 +264,49 @@ function markTransactionAsPaid(transactions, id) {
 }
 
 /**
- * Validates import data format
+ * Validates import data format with schema validation
  */
 function validateImportData(data) {
     if (!Array.isArray(data)) {
         return { valid: false, error: 'Invalid database file format.' };
     }
     
-    // Check if each item has required fields
-    const requiredFields = ['id', 'timestamp', 'type', 'status', 'amount', 'desc'];
+    // Check if each item has required fields with proper types
+    const requiredFields = [
+        { name: 'id', type: 'string' },
+        { name: 'timestamp', type: 'string' },
+        { name: 'type', type: 'string', enum: ['INCOME', 'EXPENSE'] },
+        { name: 'status', type: 'string', enum: ['PAID', 'CREDIT', 'PENDING'] },
+        { name: 'amount', type: 'number' },
+        { name: 'desc', type: 'string' }
+    ];
+    
     for (let i = 0; i < data.length; i++) {
         const item = data[i];
+        
+        // Check for prototype pollution attempts
+        if (item.hasOwnProperty('__proto__') || item.hasOwnProperty('constructor') || item.hasOwnProperty('prototype')) {
+            return { valid: false, error: `Potential prototype pollution detected in transaction ${i}` };
+        }
+        
         for (const field of requiredFields) {
-            if (!(field in item)) {
-                return { valid: false, error: `Missing required field '${field}' in transaction ${i}` };
+            if (!(field.name in item)) {
+                return { valid: false, error: `Missing required field '${field.name}' in transaction ${i}` };
+            }
+            
+            // Type validation
+            if (typeof item[field.name] !== field.type) {
+                return { valid: false, error: `Field '${field.name}' must be of type ${field.type} in transaction ${i}` };
+            }
+            
+            // Enum validation
+            if (field.enum && !field.enum.includes(item[field.name])) {
+                return { valid: false, error: `Field '${field.name}' must be one of ${field.enum.join(', ')} in transaction ${i}` };
+            }
+            
+            // Amount validation - must be positive number
+            if (field.name === 'amount' && (item[field.name] < 0 || isNaN(item[field.name]))) {
+                return { valid: false, error: `Amount must be a positive number in transaction ${i}` };
             }
         }
     }
